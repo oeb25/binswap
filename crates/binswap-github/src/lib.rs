@@ -306,7 +306,7 @@ impl BinswapGithub {
                     .execute(Print("\n  About to write binary to ".green()))?
                     .execute(Print(format!("`{}`\n", target_binary.display())))?;
 
-                if !self.no_confirm || confirm().await {
+                if self.no_confirm || confirm().await {
                     if !self.dry_run {
                         tokio::fs::rename(bin_path, target_binary).await?;
                     }
