@@ -317,7 +317,7 @@ impl BinswapGithub {
                         .execute(Print(" has been updated!".green()))?
                         .execute(Print(
                             if self.dry_run {
-                                "(not actually since it was a dry-run)"
+                                " (not actually since it was a dry-run)"
                             } else {
                                 ""
                             }
