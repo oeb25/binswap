@@ -314,8 +314,15 @@ impl BinswapGithub {
                     stderr()
                         .execute(Print("\n".green()))?
                         .execute(Print(&name))?
-                        .execute(Print(" has been updated!\n".green()))?
-                        .execute(Print("(not actually since it was a dry-run)".dim()))?
+                        .execute(Print(" has been updated!".green()))?
+                        .execute(Print(
+                            if self.dry_run {
+                                "(not actually since it was a dry-run)"
+                            } else {
+                                ""
+                            }
+                            .dim(),
+                        ))?
                         .execute(Print("\n"))?
                         .execute(ResetColor)?;
                 } else {
