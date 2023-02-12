@@ -61,7 +61,7 @@
 use std::{
     io::{self, stderr, BufRead, StdinLock},
     num::NonZeroU64,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
     thread,
     time::Duration,
@@ -226,7 +226,10 @@ impl BinswapGithub {
             resolver.fetch_and_extract(temp.path()).await?;
 
             let mut dir = tokio::fs::read_dir(temp.path()).await?;
-            let bin_path = temp.path().join(&self.bin_name);
+            let bin_name = PathBuf::from(self.bin_name.clone());
+            #[cfg(windows)]
+            let bin_name = bin_name.with_extension("exe");
+            let bin_path = temp.path().join(&bin_name);
             let mut bin_path = if tokio::fs::metadata(&bin_path).await.is_ok() {
                 Some(bin_path)
             } else {
@@ -235,7 +238,7 @@ impl BinswapGithub {
             if bin_path.is_none() {
                 'bin_search: while let Some(entry) = dir.next_entry().await? {
                     if entry.file_type().await?.is_dir() {
-                        let b = entry.path().join(&self.bin_name);
+                        let b = entry.path().join(&bin_name);
                         if tokio::fs::metadata(&b).await.is_ok() {
                             bin_path = Some(b);
                             break 'bin_search;
@@ -260,7 +263,7 @@ impl BinswapGithub {
 
                 stderr()
                     .execute(Print("\n  About to write binary to ".green()))?
-                    .execute(Print(format!("{target_binary:?}\n")))?;
+                    .execute(Print(format!("`{}`\n", target_binary.display())))?;
 
                 if confirm().await {
                     stderr()
@@ -269,7 +272,7 @@ impl BinswapGithub {
                         .execute(Print(" has been updated!\n".green()))?
                         .execute(ResetColor)?;
 
-                    tokio::fs::copy(bin_path, target_binary).await?;
+                    tokio::fs::rename(bin_path, target_binary).await?;
                 } else {
                     return Ok(());
                 }
