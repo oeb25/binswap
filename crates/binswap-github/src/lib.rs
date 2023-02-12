@@ -113,11 +113,14 @@ pub struct BinswapGithub {
     /// The desired version to download. If not given the latest will be used.
     #[builder(setter(into, strip_option), default)]
     version: Option<String>,
+    /// Do not prompt user for confirmation before installing.
+    #[builder(setter(into), default = "false")]
+    no_confirm: bool,
     /// The command to run to check that the binary is executable before
     /// installing it.
     #[builder(setter(into), default = "\"--help\".to_string()")]
     check_with_cmd: String,
-    /// Do not run the check command be fore installing.
+    /// Do not run the check command before installing.
     #[builder(setter(into), default = "false")]
     no_check_with_cmd: bool,
     /// Determine and download binary, but do not install it.
@@ -303,7 +306,7 @@ impl BinswapGithub {
                     .execute(Print("\n  About to write binary to ".green()))?
                     .execute(Print(format!("`{}`\n", target_binary.display())))?;
 
-                if confirm().await {
+                if !self.no_confirm && confirm().await {
                     if !self.dry_run {
                         tokio::fs::rename(bin_path, target_binary).await?;
                     }
