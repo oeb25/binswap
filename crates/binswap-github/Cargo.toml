@@ -1,0 +1,31 @@
+[package]
+name = "binswap-github"
+description = "Download and swap binaries from GitHub"
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+homepage = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+repository = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+binstalk = "0.8.0"
+color-eyre = "0.6.2"
+crates_io_api = "0.8.1"
+crossterm = "0.26.0"
+derive_builder = "0.12.0"
+serde = { version = "1.0.152", features = ["derive"] }
+tempfile = "3.3.0"
+tokio = { version = "1.25.0" }
+
+[dev-dependencies]
+tokio = { version = "1.25.0", features = ["full"] }
+tracing = "0.1.37"
+tracing-error = "0.2.0"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+
+[badges]
+github = { repository = "oeb25/binswap" }
