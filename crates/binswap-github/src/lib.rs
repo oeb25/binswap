@@ -19,7 +19,8 @@
 //!
 //! The following example downloads the latest release [`ripgrep` from
 //! GitHub](https://github.com/BurntSushi/ripgrep/releases), and swaps it with
-//! the currently executed binary.
+//! the currently executed binary. `.dry_run(true)` is added here to simulate
+//! the execution, but not perform the update.
 //!
 //! ```
 //! #[tokio::main]
@@ -29,6 +30,7 @@
 //!         .repo_name("ripgrep")
 //!         .asset_name("ripgrep")
 //!         .bin_name("rg")
+//!         .dry_run(true)
 //!         .build()?
 //!         .fetch_and_write_in_place_of_current_exec()
 //!         .await?;
@@ -48,6 +50,7 @@
 //!         .repo_name("ripgrep")
 //!         .asset_name("ripgrep")
 //!         .bin_name("rg")
+//!         .dry_run(true)
 //!         .build()?
 //!         .fetch_and_write_to("./rg")
 //!         .await?;
@@ -73,7 +76,10 @@ use binstalk::{
     helpers::remote::Client,
     manifests::cargo_toml_binstall::PkgMeta,
 };
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{
+    eyre::{eyre, Context},
+    Result,
+};
 use crossterm::{
     cursor::{RestorePosition, SavePosition},
     style::{Print, ResetColor, Stylize},
@@ -114,6 +120,9 @@ pub struct BinswapGithub {
     /// Do not run the check command be fore installing.
     #[builder(setter(into), default = "false")]
     no_check_with_cmd: bool,
+    /// Determine and download binary, but do not install it.
+    #[builder(setter(into), default = "false")]
+    dry_run: bool,
 }
 
 impl BinswapGithub {
@@ -165,7 +174,7 @@ impl BinswapGithub {
                 ))?
                 .execute(ResetColor)?;
 
-            let res: Response = client
+            let res = client
                 .get_inner()
                 .get(format!(
                     "https://api.github.com/repos/{}/{}/releases/latest",
@@ -173,8 +182,10 @@ impl BinswapGithub {
                 ))
                 .send()
                 .await?
-                .json()
+                .text()
                 .await?;
+            let res: Response =
+                serde_json::from_str(&res).wrap_err_with(|| format!("received json: {res}"))?;
             res.tag_name.trim_start_matches('v').to_string()
         };
 
@@ -266,13 +277,17 @@ impl BinswapGithub {
                     .execute(Print(format!("`{}`\n", target_binary.display())))?;
 
                 if confirm().await {
+                    if !self.dry_run {
+                        tokio::fs::rename(bin_path, target_binary).await?;
+                    }
+
                     stderr()
                         .execute(Print("\n".green()))?
                         .execute(Print(&name))?
                         .execute(Print(" has been updated!\n".green()))?
+                        .execute(Print("(not actually since it was a dry-run)".dim()))?
+                        .execute(Print("\n"))?
                         .execute(ResetColor)?;
-
-                    tokio::fs::rename(bin_path, target_binary).await?;
                 } else {
                     return Ok(());
                 }

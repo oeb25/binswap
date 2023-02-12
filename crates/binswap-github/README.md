@@ -24,7 +24,8 @@ distributed binary.
 
 The following example downloads the latest release [`ripgrep` from
 GitHub](https://github.com/BurntSushi/ripgrep/releases), and swaps it with
-the currently executed binary.
+the currently executed binary. `.dry_run(true)` is added here to simulate
+the execution, but not perform the update.
 
 ```rust
 #[tokio::main]
@@ -34,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .repo_name("ripgrep")
         .asset_name("ripgrep")
         .bin_name("rg")
+        .dry_run(true)
         .build()?
         .fetch_and_write_in_place_of_current_exec()
         .await?;
@@ -53,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .repo_name("ripgrep")
         .asset_name("ripgrep")
         .bin_name("rg")
+        .dry_run(true)
         .build()?
         .fetch_and_write_to("./rg")
         .await?;
