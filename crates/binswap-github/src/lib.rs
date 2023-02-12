@@ -123,6 +123,23 @@ pub struct BinswapGithub {
     /// Determine and download binary, but do not install it.
     #[builder(setter(into), default = "false")]
     dry_run: bool,
+    /// The possible targets to download. If provided, targets will not be
+    /// auto-detected.
+    #[builder(setter(into, strip_option), default)]
+    targets: Option<Vec<String>>,
+}
+
+impl BinswapGithubBuilder {
+    /// Add the target to list of possible targets to download. If provided,
+    /// targets will not be auto-detected.
+    pub fn add_target(&mut self, target: impl Into<String>) -> &mut Self {
+        self.targets
+            .get_or_insert_with(|| Some(vec![]))
+            .as_mut()
+            .unwrap()
+            .push(target.into());
+        self
+    }
 }
 
 impl BinswapGithub {
@@ -195,7 +212,12 @@ impl BinswapGithub {
             .execute(Print("\n"))?
             .execute(ResetColor)?;
 
-        for target in get_desired_targets(None).get().await {
+        let targets = if let Some(targets) = self.targets.clone() {
+            targets
+        } else {
+            get_desired_targets(None).get().await.to_vec()
+        };
+        for target in &targets {
             let resolver = GhCrateMeta::new(
                 client.clone(),
                 Arc::new(Data {
@@ -238,8 +260,13 @@ impl BinswapGithub {
 
             let mut dir = tokio::fs::read_dir(temp.path()).await?;
             let bin_name = PathBuf::from(self.bin_name.clone());
-            #[cfg(windows)]
-            let bin_name = bin_name.with_extension("exe");
+
+            let bin_name = if target.contains("windows") {
+                bin_name.with_extension("exe")
+            } else {
+                bin_name
+            };
+
             let bin_path = temp.path().join(&bin_name);
             let mut bin_path = if tokio::fs::metadata(&bin_path).await.is_ok() {
                 Some(bin_path)
