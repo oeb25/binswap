@@ -308,7 +308,28 @@ impl BinswapGithub {
 
                 if self.no_confirm || confirm().await {
                     if !self.dry_run {
-                        tokio::fs::rename(bin_path, target_binary).await?;
+                        let backup_bin = temp.path().join("backup-binary");
+
+                        // NOTE: Swapping procedure:
+                        // - Move the old binary into a temp folder
+                        // - Move the new binary into target destination, which
+                        //   should now be vacant
+                        //   - If this fails, move the old binary back
+                        // - The temp folder will be dropped at the end of
+                        //   scope, removing the old binary
+                        tokio::fs::rename(target_binary, &backup_bin)
+                            .await
+                            .wrap_err("failed to move old binary before updating to new")?;
+                        if let Err(e) = tokio::fs::rename(bin_path, target_binary).await {
+                            if let Err(e2) = tokio::fs::rename(backup_bin, target_binary).await {
+                                let error_msg = "failed to move old binary back after failing to move new binary into target destination";
+                                return Err(e2).wrap_err(error_msg).wrap_err(e);
+                            } else {
+                                return Err(e).wrap_err({
+                                    "failed to put new binary into target destination"
+                                });
+                            }
+                        }
                     }
 
                     stderr()
@@ -338,6 +359,8 @@ impl BinswapGithub {
                 ))?;
             }
         }
+
+        drop(temp);
 
         Err(eyre!("not found"))
     }
