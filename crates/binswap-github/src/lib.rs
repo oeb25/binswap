@@ -62,9 +62,11 @@
 #![warn(missing_docs)]
 
 use std::{
+    borrow::Cow,
+    env,
     io::{self, stderr, BufRead, StdinLock},
     num::NonZeroU64,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
     thread,
     time::Duration,
@@ -73,7 +75,11 @@ use std::{
 use binstalk::{
     fetchers::{Data, Fetcher, GhCrateMeta, TargetData},
     get_desired_targets,
-    helpers::remote::Client,
+    helpers::{
+        download::ExtractedFilesEntry,
+        gh_api_client::GhApiClient,
+        remote::{Client, Url},
+    },
     manifests::cargo_toml_binstall::PkgMeta,
 };
 use color_eyre::{
@@ -172,7 +178,16 @@ impl BinswapGithub {
             None,
             Duration::from_millis(5),
             NonZeroU64::new(1).unwrap(),
+            None,
         )?;
+
+        let gh_api_client = GhApiClient::new(
+            client.clone(),
+            env::var("GH_TOKEN")
+                .or_else(|_| env::var("GITHUB_TOKEN"))
+                .ok()
+                .map(Into::into),
+        );
 
         stderr()
             .execute(Print("Updating ".green()))?
@@ -194,18 +209,15 @@ impl BinswapGithub {
                 ))?
                 .execute(ResetColor)?;
 
-            let res = client
-                .get_inner()
-                .get(format!(
+            let res: Response = client
+                .get(Url::parse(&format!(
                     "https://api.github.com/repos/{}/{}/releases/latest",
                     self.repo_author, self.repo_name
-                ))
-                .send()
+                ))?)
+                .send(true)
                 .await?
-                .text()
+                .json()
                 .await?;
-            let res: Response =
-                serde_json::from_str(&res).wrap_err_with(|| format!("received json: {res}"))?;
             res.tag_name.trim_start_matches('v').to_string()
         };
 
@@ -220,30 +232,25 @@ impl BinswapGithub {
         } else {
             get_desired_targets(None).get().await.to_vec()
         };
+        let data = Arc::new(Data::new(
+            self.asset_name
+                .as_deref()
+                .map(Into::into)
+                .unwrap_or_else(|| self.bin_name.as_str().into()),
+            version.into(),
+            Some(format!(
+                "https://github.com/{}/{}/",
+                self.repo_author, self.repo_name
+            )),
+        ));
         for target in &targets {
             let resolver = GhCrateMeta::new(
                 client.clone(),
-                Arc::new(Data {
-                    name: self
-                        .asset_name
-                        .clone()
-                        .unwrap_or_else(|| self.bin_name.clone())
-                        .into(),
-                    version: version.clone().into(),
-                    repo: Some(format!(
-                        "https://github.com/{}/{}/",
-                        self.repo_author, self.repo_name
-                    )),
-                }),
+                gh_api_client.clone(),
+                data.clone(),
                 Arc::new(TargetData {
                     target: target.into(),
-                    meta: PkgMeta {
-                        pkg_url: None,
-                        pkg_fmt: None,
-                        bin_dir: None,
-                        pub_key: None,
-                        overrides: Default::default(),
-                    },
+                    meta: PkgMeta::default(),
                 }),
             );
 
@@ -259,105 +266,110 @@ impl BinswapGithub {
 
             stderr().execute(Print("Found a binary! Downloading...\n".magenta().italic()))?;
 
-            resolver.fetch_and_extract(temp.path()).await?;
+            let extracted_files = resolver.fetch_and_extract(temp.path()).await?;
 
-            let mut dir = tokio::fs::read_dir(temp.path()).await?;
-            let bin_name = PathBuf::from(self.bin_name.clone());
+            let bin_name = Path::new(&self.bin_name);
 
             let bin_name = if target.contains("windows") {
-                bin_name.with_extension("exe")
+                Cow::Owned(bin_name.with_extension("exe"))
             } else {
-                bin_name
+                Cow::Borrowed(bin_name)
             };
 
-            let bin_path = temp.path().join(&bin_name);
-            let mut bin_path = if tokio::fs::metadata(&bin_path).await.is_ok() {
-                Some(bin_path)
+            let bin_path = if extracted_files.has_file(&bin_name) {
+                temp.path().join(&bin_name)
             } else {
-                None
-            };
-            if bin_path.is_none() {
-                'bin_search: while let Some(entry) = dir.next_entry().await? {
-                    if entry.file_type().await?.is_dir() {
-                        let b = entry.path().join(&bin_name);
-                        if tokio::fs::metadata(&b).await.is_ok() {
-                            bin_path = Some(b);
-                            break 'bin_search;
+                let res = (|| {
+                    let entries = extracted_files.get_dir(Path::new("."))?;
+                    for entry in entries {
+                        if let Some(ExtractedFilesEntry::Dir(entries)) =
+                            extracted_files.get_entry(Path::new(entry))
+                        {
+                            if entries.contains(bin_name.as_os_str()) {
+                                let mut p = temp.path().join(Path::new(&**entry));
+                                p.push(&bin_name);
+                                return Some(p);
+                            }
                         }
                     }
+
+                    None
+                })();
+
+                if let Some(bin_path) = res {
+                    bin_path
+                } else {
+                    stderr().execute(Print(
+                        " > No binary found in asset, trying next target...\n"
+                            .red()
+                            .italic(),
+                    ))?;
+                    continue;
+                }
+            };
+
+            if !self.no_check_with_cmd {
+                let res = tokio::process::Command::new(&bin_path)
+                    .arg(&self.check_with_cmd)
+                    .output()
+                    .await?;
+                if !res.status.success() {
+                    return Err(eyre!(
+                        "Could not execute `{}` on downloaded binary: {}",
+                        self.check_with_cmd,
+                        res.status,
+                    ));
                 }
             }
 
-            if let Some(bin_path) = bin_path {
-                if !self.no_check_with_cmd {
-                    let res = tokio::process::Command::new(&bin_path)
-                        .arg(&self.check_with_cmd)
-                        .output()
-                        .await?;
-                    if !res.status.success() {
-                        return Err(eyre!(
-                            "Could not execute `{}` on downloaded binary",
-                            self.check_with_cmd
-                        ));
+            stderr()
+                .execute(Print("\n  About to write binary to ".green()))?
+                .execute(Print(format!("`{}`\n", target_binary.display())))?;
+
+            if self.no_confirm || confirm().await {
+                if !self.dry_run {
+                    let backup_bin = temp.path().join("backup-binary");
+
+                    // NOTE: Swapping procedure:
+                    // - Move the old binary into a temp folder
+                    // - Move the new binary into target destination, which
+                    //   should now be vacant
+                    //   - If this fails, move the old binary back
+                    // - The temp folder will be dropped at the end of
+                    //   scope, removing the old binary
+                    tokio::fs::rename(target_binary, &backup_bin)
+                        .await
+                        .wrap_err("failed to move old binary before updating to new")?;
+                    if let Err(e) = tokio::fs::rename(bin_path, target_binary).await {
+                        if let Err(e2) = tokio::fs::rename(backup_bin, target_binary).await {
+                            let error_msg = "failed to move old binary back after failing to move new binary into target destination";
+                            return Err(e2).wrap_err(error_msg).wrap_err(e);
+                        } else {
+                            return Err(e)
+                                .wrap_err("failed to put new binary into target destination");
+                        }
                     }
                 }
 
                 stderr()
-                    .execute(Print("\n  About to write binary to ".green()))?
-                    .execute(Print(format!("`{}`\n", target_binary.display())))?;
-
-                if self.no_confirm || confirm().await {
-                    if !self.dry_run {
-                        let backup_bin = temp.path().join("backup-binary");
-
-                        // NOTE: Swapping procedure:
-                        // - Move the old binary into a temp folder
-                        // - Move the new binary into target destination, which
-                        //   should now be vacant
-                        //   - If this fails, move the old binary back
-                        // - The temp folder will be dropped at the end of
-                        //   scope, removing the old binary
-                        tokio::fs::rename(target_binary, &backup_bin)
-                            .await
-                            .wrap_err("failed to move old binary before updating to new")?;
-                        if let Err(e) = tokio::fs::rename(bin_path, target_binary).await {
-                            if let Err(e2) = tokio::fs::rename(backup_bin, target_binary).await {
-                                let error_msg = "failed to move old binary back after failing to move new binary into target destination";
-                                return Err(e2).wrap_err(error_msg).wrap_err(e);
-                            } else {
-                                return Err(e).wrap_err({
-                                    "failed to put new binary into target destination"
-                                });
-                            }
+                    .execute(Print("\n".green()))?
+                    .execute(Print(&name))?
+                    .execute(Print(" has been updated!".green()))?
+                    .execute(Print(
+                        if self.dry_run {
+                            " (not actually since it was a dry-run)"
+                        } else {
+                            ""
                         }
-                    }
-
-                    stderr()
-                        .execute(Print("\n".green()))?
-                        .execute(Print(&name))?
-                        .execute(Print(" has been updated!".green()))?
-                        .execute(Print(
-                            if self.dry_run {
-                                " (not actually since it was a dry-run)"
-                            } else {
-                                ""
-                            }
-                            .dim(),
-                        ))?
-                        .execute(Print("\n"))?
-                        .execute(ResetColor)?;
-                } else {
-                    return Ok(());
-                }
-
-                return Ok(());
+                        .dim(),
+                    ))?
+                    .execute(Print("\n"))?
+                    .execute(ResetColor)?;
             } else {
-                stderr().execute(Print(
-                    " > No binary found in asset, trying next target...\n"
-                        .red()
-                        .italic(),
-                ))?;
+                return Ok(());
             }
+
+            return Ok(());
         }
 
         drop(temp);
