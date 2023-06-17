@@ -4,7 +4,7 @@ edition = "2021"
 homepage = "https://github.com/oeb25/binswap"
 license = "MIT/Apache-2.0"
 authors = ["Oliver Bøving <oliver@bvng.dk>"]
-repository = "https://github.com/oeb25/binswrap"
+repository = "https://github.com/oeb25/binswap"
 
 [workspace]
 members = ["crates/binswap-github"]
