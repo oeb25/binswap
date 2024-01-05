@@ -8,3 +8,4 @@ repository = "https://github.com/oeb25/binswap"
 
 [workspace]
 members = ["crates/binswap-github"]
+resolver = "2"

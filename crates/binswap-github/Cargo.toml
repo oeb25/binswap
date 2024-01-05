@@ -14,8 +14,8 @@ repository = { workspace = true }
 [dependencies]
 binstalk = { version = "0.12.0", features = ["trust-dns"] }
 color-eyre = "0.6.2"
-crates_io_api = "0.8.1"
-crossterm = "0.26.0"
+crates_io_api = "0.9.0"
+crossterm = "0.27.0"
 derive_builder = "0.12.0"
 serde = { version = "1.0.152", features = ["derive"] }
 tempfile = "3.3.0"
